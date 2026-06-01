@@ -1,0 +1,53 @@
+{
+  "format": "xps_fit_conditions",
+  "version": 1,
+  "material": "Si  2p_conditions",
+  "region": "Si  2p",
+  "bgStart": 108.0,
+  "bgEnd": 95.0,
+  "poissonWeighting": true,
+  "peaks": [
+    {
+      "label": "P1",
+      "name": "O-Si-CHx",
+      "family": "PV",
+      "position": 102.0667,
+      "positionConstraint": "",
+      "fix_pos": false,
+      "area": 732.2501,
+      "areaConstraint": "",
+      "fix_area": false,
+      "sigma": 0.9784,
+      "sigmaConstraint": "",
+      "fix_sigma": false,
+      "gamma": 0.3,
+      "fix_gamma": false,
+      "fraction": 0.3,
+      "fix_fraction": true,
+      "skew": 0.0,
+      "fix_skew": false,
+      "lineShape": "PV(0.3)"
+    },
+    {
+      "label": "P2",
+      "name": "Peak 2",
+      "family": "PV",
+      "position": 99.314,
+      "positionConstraint": "",
+      "fix_pos": false,
+      "area": 167.7435,
+      "areaConstraint": "",
+      "fix_area": false,
+      "sigma": 1.0314,
+      "sigmaConstraint": "0.1:3",
+      "fix_sigma": false,
+      "gamma": 0.3,
+      "fix_gamma": false,
+      "fraction": 0.3,
+      "fix_fraction": true,
+      "skew": 0.0,
+      "fix_skew": false,
+      "lineShape": "PV(0.3)"
+    }
+  ]
+}

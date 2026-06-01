@@ -1,0 +1,53 @@
+{
+  "format": "xps_fit_conditions",
+  "version": 1,
+  "material": "C 1s_conditions",
+  "region": "C 1s",
+  "bgStart": 289.2649,
+  "bgEnd": 280.2649,
+  "poissonWeighting": true,
+  "peaks": [
+    {
+      "label": "P1",
+      "name": "Peak 1",
+      "family": "PV",
+      "position": 284.8,
+      "positionConstraint": "",
+      "fix_pos": false,
+      "area": 11544.5135,
+      "areaConstraint": "",
+      "fix_area": false,
+      "sigma": 0.9483,
+      "sigmaConstraint": "",
+      "fix_sigma": false,
+      "gamma": 0.3,
+      "fix_gamma": false,
+      "fraction": 0.3,
+      "fix_fraction": true,
+      "skew": 0.0,
+      "fix_skew": false,
+      "lineShape": "PV(0.3)"
+    },
+    {
+      "label": "P2",
+      "name": "Peak 2",
+      "family": "PV",
+      "position": 286.2307,
+      "positionConstraint": "286:288",
+      "fix_pos": false,
+      "area": 218.641,
+      "areaConstraint": "",
+      "fix_area": false,
+      "sigma": 0.3796,
+      "sigmaConstraint": "0.1:6",
+      "fix_sigma": false,
+      "gamma": 0.3,
+      "fix_gamma": false,
+      "fraction": 0.3,
+      "fix_fraction": true,
+      "skew": 0.0,
+      "fix_skew": false,
+      "lineShape": "PV(0.3)"
+    }
+  ]
+}
