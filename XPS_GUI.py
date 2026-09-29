@@ -1,5 +1,5 @@
 """
-XPS Analysis Tool V6 - Composition Analysis, lmfit Line Shapes + Fitting,
+XPS Analysis Tool V6 - .xy / VAMAS (.vms) input, Composition Analysis, lmfit Line Shapes + Fitting,
 Doublet Constraints.
 """
 
@@ -58,6 +58,205 @@ def guess_element(region_name):
     for k, v in REGION_ELEMENT_MAP.items():
         if k in nl: return v
     return None
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  VAMAS (.vms) reader  —  ISO 14976 "Surface Chemical Analysis Standard
+#  Data Transfer Format".  Pure Python, no GUI dependencies.
+# ═══════════════════════════════════════════════════════════════════════════
+class VamasError(Exception):
+    pass
+
+
+class _VamasLines:
+    """Sequential line reader with helpful error messages."""
+    def __init__(self, lines):
+        self.lines = lines; self.i = 0
+
+    def str(self):
+        if self.i >= len(self.lines):
+            raise VamasError("Unexpected end of VAMAS file (line %d)." % (self.i + 1))
+        s = self.lines[self.i]; self.i += 1
+        return s
+
+    def int(self):
+        s = self.str()
+        try: return int(float(s.strip()))
+        except ValueError: raise VamasError(f"Expected an integer on line {self.i}, got '{s}'.")
+
+    def float(self):
+        s = self.str()
+        try: return float(s.strip())
+        except ValueError: raise VamasError(f"Expected a number on line {self.i}, got '{s}'.")
+
+
+# Experiment modes / techniques that switch optional block entries on or off
+_VMS_MAP_MODES       = {'MAP', 'MAPDP'}
+_VMS_FOV_MODES       = {'MAP', 'MAPDP', 'MAPSV', 'MAPSVDP', 'SEM'}
+_VMS_LINESCAN_MODES  = {'MAPSV', 'MAPSVDP', 'SEM'}
+_VMS_SPUTTER_MODES   = {'MAPDP', 'MAPSVDP', 'SDP', 'SDPSV'}
+_VMS_REGION_MODES    = {'MAP', 'MAPDP', 'NORM', 'SDP'}
+_VMS_ION_TECHNIQUES  = {'FABMS', 'FABMS ENERGY SPEC', 'ISS', 'SIMS',
+                        'SIMS ENERGY SPEC', 'SNMS', 'SNMS ENERGY SPEC'}
+_VMS_SPUTTER_TECHS   = {'AES DIFF', 'AES DIR', 'EDX', 'ELS', 'UPS', 'XPS', 'XRF'}
+
+
+def _vms_read_block(r, hdr, first):
+    """Read one VAMAS block.  Items excluded by the header's inclusion/exclusion
+    list are copied from the first block, as the standard requires."""
+    inc = hdr['include']
+    def has(item):
+        return first is None or item in inc
+
+    b = {}
+    def take(item, key, fn):
+        b[key] = fn() if has(item) else copy.deepcopy(first[key])
+
+    mode = hdr['mode']
+    take(1, 'block_id', r.str)
+    take(2, 'sample_id', r.str)
+    if has(3): b['date'] = [r.int() for _ in range(7)]          # items 3-9
+    else: b['date'] = list(first['date'])
+    if has(10):
+        n = r.int(); b['comment'] = [r.str() for _ in range(n)]
+    else: b['comment'] = list(first['comment'])
+    take(11, 'technique', r.str)
+    tech = b['technique'].strip().upper()
+    if mode in _VMS_MAP_MODES:
+        if has(12): r.int(); r.int()                             # x, y coordinate
+    if has(13): b['exp_vars'] = [r.float() for _ in range(len(hdr['exp_vars']))]
+    else: b['exp_vars'] = list(first['exp_vars'])
+    take(14, 'source_label', r.str)
+    if mode in _VMS_SPUTTER_MODES or tech in _VMS_ION_TECHNIQUES:
+        if has(15): r.int(); r.int(); r.int()                    # ion Z, atoms, charge
+    take(16, 'excitation_energy', r.float)
+    take(17, 'source_strength', r.float)
+    if has(18): r.float(); r.float()                             # beam width x, y
+    if mode in _VMS_FOV_MODES and has(19): r.float(); r.float()
+    if mode in _VMS_LINESCAN_MODES and has(20):
+        for _ in range(6): r.int()
+    if has(21): r.float()                                        # source polar angle
+    if has(22): r.float()                                        # source azimuth
+    take(23, 'analyser_mode', r.str)
+    take(24, 'pass_energy', r.float)
+    if tech == 'AES DIFF' and has(25): r.float()
+    if has(26): r.float()                                        # magnification
+    take(27, 'work_function', r.float)
+    if has(28): r.float()                                        # target bias
+    if has(29): r.float(); r.float()                             # analysis width x, y
+    if has(30): r.float(); r.float()                             # take-off polar, azimuth
+    take(31, 'species', r.str)
+    if has(32):
+        b['transition'] = r.str(); r.int()                       # + charge of particle
+    else: b['transition'] = first['transition']
+    if hdr['scan_mode'] == 'REGULAR':
+        if has(33):
+            b['x_label'] = r.str(); b['x_units'] = r.str()
+            b['x_start'] = r.float(); b['x_step'] = r.float()
+        else:
+            for k in ('x_label', 'x_units', 'x_start', 'x_step'): b[k] = first[k]
+    if has(34):
+        n = r.int(); b['y_vars'] = [(r.str(), r.str()) for _ in range(n)]
+    else: b['y_vars'] = list(first['y_vars'])
+    take(35, 'signal_mode', r.str)
+    take(36, 'dwell_time', r.float)
+    take(37, 'n_scans', r.int)
+    if has(38): r.float()                                        # signal time correction
+    if tech in _VMS_SPUTTER_TECHS and mode in _VMS_SPUTTER_MODES and has(39):
+        for _ in range(6): r.float()
+        r.str()
+    if has(40): r.float(); r.float(); r.float()                  # sample tilt / rotation
+    if has(41):
+        n = r.int(); b['extra_params'] = [(r.str(), r.str(), r.str()) for _ in range(n)]
+    else: b['extra_params'] = list(first['extra_params'])
+    for _ in range(hdr['n_future_block']): r.str()
+
+    n_vals = r.int()
+    nv = max(1, len(b['y_vars']))
+    for _ in range(nv): r.float(); r.float()                     # min / max per variable
+    vals = [r.float() for _ in range(n_vals)]
+    b['columns'] = [vals[k::nv] for k in range(nv)]
+    return b
+
+
+def parse_vamas(filename):
+    """Parse a VAMAS (.vms) file and return a list of regions in the same
+    structure the .xy reader produces:
+        {'name', 'metadata': {'region', 'excitationEnergy', ...},
+         'data': [{'ke', 'be', 'counts'}, ...]}"""
+    with open(filename, 'r', encoding='latin-1') as f:
+        lines = [ln.rstrip('\r\n') for ln in f]
+    r = _VamasLines(lines)
+
+    ident = r.str()
+    if 'VAMAS' not in ident.upper():
+        raise VamasError("This does not look like a VAMAS file (missing header line).")
+    for _ in range(4): r.str()                  # institution, instrument, operator, experiment
+    for _ in range(r.int()): r.str()            # header comment lines
+    hdr = {'mode': r.str().strip().upper(), 'scan_mode': r.str().strip().upper()}
+    if hdr['mode'] in _VMS_REGION_MODES: r.int()                 # number of spectral regions
+    if hdr['mode'] in _VMS_MAP_MODES: r.int(); r.int(); r.int()
+    hdr['exp_vars'] = [(r.str(), r.str()) for _ in range(r.int())]
+    n_incl = r.int()
+    listed = {r.int() for _ in range(abs(n_incl))}
+    all_items = set(range(1, 42))
+    if n_incl == 0:  hdr['include'] = all_items
+    elif n_incl > 0: hdr['include'] = listed
+    else:            hdr['include'] = all_items - listed
+    for _ in range(r.int()): r.str()            # manually entered items
+    n_future_exp = r.int(); hdr['n_future_block'] = r.int()
+    for _ in range(n_future_exp): r.str()
+    n_blocks = r.int()
+
+    blocks, first = [], None
+    for _ in range(n_blocks):
+        b = _vms_read_block(r, hdr, first)
+        if first is None: first = b
+        blocks.append(b)
+
+    regions, used = [], {}
+    for b in blocks:
+        exc = b['excitation_energy']
+        # abscissa (energy axis)
+        if hdr['scan_mode'] == 'REGULAR':
+            n = len(b['columns'][0])
+            x = [b['x_start'] + i * b['x_step'] for i in range(n)]
+            x_label = b['x_label']; cols = b['columns']; labels = [v[0] for v in b['y_vars']]
+        else:   # IRREGULAR: one corresponding variable holds the energy axis
+            labels = [v[0] for v in b['y_vars']]
+            xi = next((k for k, l in enumerate(labels) if 'energy' in l.lower()), 0)
+            x = b['columns'][xi]; x_label = labels[xi]
+            cols = [c for k, c in enumerate(b['columns']) if k != xi]
+            labels = [l for k, l in enumerate(labels) if k != xi]
+        if not cols:
+            continue
+        # intensity: prefer a variable called "counts"/"intensity", else the first one
+        yi = next((k for k, l in enumerate(labels)
+                   if any(t in l.lower() for t in ('count', 'intens', 'cps'))), 0)
+        y = cols[yi]
+        is_be = 'binding' in x_label.lower()
+
+        # region name: "Species Transition" (e.g. "C 1s"), falling back to block id
+        name = ' '.join(b.get('block_id', '').split())
+        if not name:
+            name = ' '.join(f"{b.get('species','')} {b.get('transition','')}".split()) or 'Region'
+        used[name] = used.get(name, 0) + 1
+        if used[name] > 1: name = f"{name} ({used[name]})"
+
+        data = []
+        for xv, cv in zip(x, y):
+            ke = (exc - xv) if is_be else xv
+            data.append({'ke': ke, 'be': exc - ke, 'counts': cv})
+        meta = {'region': name, 'excitationEnergy': exc, 'source': b.get('source_label', ''),
+                'technique': b.get('technique', ''), 'sample': b.get('sample_id', ''),
+                'passEnergy': b.get('pass_energy'), 'dwellTime': b.get('dwell_time'),
+                'numScans': b.get('n_scans'), 'signalMode': b.get('signal_mode', ''),
+                'format': 'VAMAS'}
+        regions.append({'name': name, 'metadata': meta, 'data': data})
+
+    if not regions:
+        raise VamasError("No spectra were found in this VAMAS file.")
+    return regions
+
 
 class UndoManager:
     def __init__(self, limit=15):
@@ -703,7 +902,7 @@ class XPSAnalysisGUI(QMainWindow):
 
         ll = QVBoxLayout()
         tc = QHBoxLayout()
-        lb = QPushButton('Load .XY File'); lb.setStyleSheet("font-weight:bold;padding:8px;")
+        lb = QPushButton('Load .XY / .VMS File'); lb.setStyleSheet("font-weight:bold;padding:8px;")
         lb.clicked.connect(self.load_file); tc.addWidget(lb)
         self.region_combo = QComboBox()
         self.region_combo.currentTextChanged.connect(self.change_region)
@@ -886,13 +1085,13 @@ class XPSAnalysisGUI(QMainWindow):
         self.update_plot(); self._update_calib_label()
 
     def calibrate_to_reference(self):
-        if not self.region_data: QMessageBox.warning(self, "No Data", "Load an .XY file first."); return
+        if not self.region_data: QMessageBox.warning(self, "No Data", "Load an .XY or .VMS file first."); return
         measured = self.cal_measured.value(); target = self.cal_target.value()
         if measured <= 0: QMessageBox.warning(self, "Invalid", "Enter the current (measured) BE of your reference peak."); return
         self._set_calibration_offset(self.calibration_offset + (target - measured))
 
     def apply_manual_offset(self):
-        if not self.region_data: QMessageBox.warning(self, "No Data", "Load an .XY file first."); return
+        if not self.region_data: QMessageBox.warning(self, "No Data", "Load an .XY or .VMS file first."); return
         self._set_calibration_offset(self.cal_offset_spin.value())
 
     def _update_calib_label(self):
@@ -900,11 +1099,27 @@ class XPSAnalysisGUI(QMainWindow):
         self.cal_offset_spin.blockSignals(True); self.cal_offset_spin.setValue(self.calibration_offset); self.cal_offset_spin.blockSignals(False)
 
     def load_file(self):
-        fn, _ = QFileDialog.getOpenFileName(self,"Open XY File", self.last_dir,"XY Files (*.xy);;All Files (*)")
+        fn, _ = QFileDialog.getOpenFileName(
+            self, "Open XPS Data File", self.last_dir,
+            "XPS Data (*.xy *.vms);;XY Files (*.xy);;VAMAS Files (*.vms);;All Files (*)")
         if fn:
             self._remember_dir(fn)
-            try: self.parse_xy_file(fn)
+            try:
+                if self._is_vamas(fn): self.parse_vms_file(fn)
+                else: self.parse_xy_file(fn)
             except Exception as e: QMessageBox.critical(self,"Error",str(e))
+
+    @staticmethod
+    def _is_vamas(filename):
+        if filename.lower().endswith('.vms'): return True
+        try:
+            with open(filename, 'r', encoding='latin-1') as f:
+                return 'VAMAS' in f.readline().upper()
+        except OSError:
+            return False
+
+    def parse_vms_file(self, filename):
+        self._populate_regions(parse_vamas(filename))
 
     def parse_xy_file(self, filename):
         self.regions = []; cr = None; meta = {}; data = []; in_data = False
@@ -924,7 +1139,11 @@ class XPSAnalysisGUI(QMainWindow):
                             data.append({'ke':ke,'be':be,'counts':counts})
                         except: continue
         if cr and data: self.regions.append({'name':cr,'metadata':meta,'data':data})
+        self._populate_regions(self.regions)
 
+    def _populate_regions(self, regions):
+        """Reset the workspace and load a list of parsed regions (from any file format)."""
+        self.regions = regions
         self._capture_region_state()
         self._switching_region = True
         for w in self.peak_widgets: w.deleteLater()
@@ -1370,7 +1589,7 @@ class XPSAnalysisGUI(QMainWindow):
         self.update_plot()
 
     def open_composition(self):
-        if not self.region_data: QMessageBox.warning(self,"No Data","Load an .XY file first."); return
+        if not self.region_data: QMessageBox.warning(self,"No Data","Load an .XY or .VMS file first."); return
         dlg = CompositionWindow(self.region_data, self.calculate_peak_shape, self.calculate_shirley_background, parent=self)
         dlg.show()
 
